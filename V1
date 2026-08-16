@@ -1,0 +1,258 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local SoundService = game:GetService("SoundService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Configuration
+local AIM_TOGGLE_KEY = Enum.KeyCode.E  -- PC key for Aim
+local ESP_TOGGLE_KEY = Enum.KeyCode.V  -- PC key for ESP
+local FOV_RADIUS = 90                  -- Reduced FOV radius for higher precision
+local SMOOTHNESS = 0.15                -- Lower value for smoother camera movement
+local TARGET_PART = "Head"             -- Target lock point
+
+local aimbotEnabled = false
+local espEnabled = true
+local menuOpen = true
+
+-- Role Colors
+local COLOR_MURDERER = Color3.fromRGB(255, 50, 50)   -- Red
+local COLOR_SHERIFF  = Color3.fromRGB(50, 150, 255)  -- Blue
+local COLOR_INNOCENT = Color3.fromRGB(50, 255, 50)   -- Green
+
+-- Audio Feedback Helper
+local function playClickSound()
+	local sound = Instance.new("Sound")
+	sound.SoundId = "rbxassetid://6895079853"
+	sound.Volume = 0.3
+	sound.Parent = SoundService
+	sound:Play()
+	sound.Ended:Connect(function() sound:Destroy() end)
+end
+
+-- Screen UI Setup
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "LightweightHUD"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+---------------------------------------------------------
+-- FOV RING
+---------------------------------------------------------
+local fovFrame = Instance.new("Frame")
+fovFrame.Name = "FOVCircle"
+fovFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+fovFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+fovFrame.Size = UDim2.new(0, FOV_RADIUS * 2, 0, FOV_RADIUS * 2)
+fovFrame.BackgroundTransparency = 1
+fovFrame.Parent = screenGui
+
+local fovCorner = Instance.new("UICorner")
+fovCorner.CornerRadius = UDim.new(1, 0)
+fovCorner.Parent = fovFrame
+
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Color = Color3.fromRGB(255, 255, 255)
+fovStroke.Thickness = 1.5
+fovStroke.Transparency = 0.5
+fovStroke.Parent = fovFrame
+
+---------------------------------------------------------
+-- CONTROL PANEL
+---------------------------------------------------------
+local menuToggleBtn = Instance.new("TextButton")
+menuToggleBtn.Name = "MenuToggleBtn"
+menuToggleBtn.Size = UDim2.new(0, 70, 0, 30)
+menuToggleBtn.Position = UDim2.new(1, -80, 0, 10)
+menuToggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+menuToggleBtn.BackgroundTransparency = 0.3
+menuToggleBtn.Text = "MENU"
+menuToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+menuToggleBtn.TextSize = 12
+menuToggleBtn.Font = Enum.Font.SourceSansBold
+menuToggleBtn.Parent = screenGui
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 6)
+toggleCorner.Parent = menuToggleBtn
+
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = Color3.fromRGB(150, 150, 150)
+toggleStroke.Thickness = 1
+toggleStroke.Parent = menuToggleBtn
+
+local container = Instance.new("Frame")
+container.Name = "ControlsContainer"
+container.Size = UDim2.new(0, 130, 0, 95)
+container.Position = UDim2.new(1, -140, 0, 45)
+container.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+container.BackgroundTransparency = 0.3
+container.Visible = menuOpen
+container.Parent = screenGui
+
+local containerCorner = Instance.new("UICorner")
+containerCorner.CornerRadius = UDim.new(0, 8)
+containerCorner.Parent = container
+
+local function createButton(name, text, posY, defaultColor)
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Size = UDim2.new(1, -12, 0, 36)
+	btn.Position = UDim2.new(0, 6, 0, posY)
+	btn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+	btn.BackgroundTransparency = 0.3
+	btn.Text = text
+	btn.TextColor3 = defaultColor
+	btn.TextSize = 12
+	btn.Font = Enum.Font.SourceSansBold
+	btn.Parent = container
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = btn
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = defaultColor
+	stroke.Thickness = 1
+	stroke.Parent = btn
+
+	return btn
+end
+
+local aimBtn = createButton("AimBtn", "AIMBOT: OFF", 8, Color3.fromRGB(200, 200, 200))
+local espBtn = createButton("EspBtn", "ESP: ON", 50, COLOR_INNOCENT)
+
+menuToggleBtn.MouseButton1Click:Connect(function()
+	playClickSound()
+	menuOpen = not menuOpen
+	container.Visible = menuOpen
+end)
+
+aimBtn.MouseButton1Click:Connect(function()
+	playClickSound()
+	aimbotEnabled = not aimbotEnabled
+	aimBtn.Text = aimbotEnabled and "AIMBOT: ON" or "AIMBOT: OFF"
+	aimBtn.TextColor3 = aimbotEnabled and COLOR_INNOCENT or Color3.fromRGB(200, 200, 200)
+	aimBtn:FindFirstChildOfClass("UIStroke").Color = aimBtn.TextColor3
+	fovStroke.Color = aimbotEnabled and COLOR_INNOCENT or Color3.fromRGB(255, 255, 255)
+end)
+
+espBtn.MouseButton1Click:Connect(function()
+	playClickSound()
+	espEnabled = not espEnabled
+	espBtn.Text = espEnabled and "ESP: ON" or "ESP: OFF"
+	espBtn.TextColor3 = espEnabled and COLOR_INNOCENT or COLOR_MURDERER
+	espBtn:FindFirstChildOfClass("UIStroke").Color = espBtn.TextColor3
+end)
+
+---------------------------------------------------------
+-- ROLE DETECTION & HIGHLIGHTS
+---------------------------------------------------------
+local function getRoleColor(player)
+	local backpack = player:FindFirstChild("Backpack")
+	local character = player.Character
+
+	local hasKnife = (backpack and backpack:FindFirstChild("Knife")) or (character and character:FindFirstChild("Knife"))
+	local hasGun = (backpack and backpack:FindFirstChild("Gun")) or (character and character:FindFirstChild("Gun"))
+
+	if hasKnife then return COLOR_MURDERER end
+	if hasGun then return COLOR_SHERIFF end
+
+	local role = player:GetAttribute("Role")
+	if role == "Murderer" or role == "Traitor" then return COLOR_MURDERER end
+	if role == "Sheriff" or role == "Hero" then return COLOR_SHERIFF end
+
+	return COLOR_INNOCENT
+end
+
+local function updateHighlightESP(player)
+	if player == LocalPlayer or not player.Character then return end
+
+	local character = player.Character
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local highlight = character:FindFirstChild("BodyHighlightESP")
+
+	if not espEnabled or not humanoid or humanoid.Health <= 0 then
+		if highlight then highlight.Enabled = false end
+		return
+	end
+
+	if not highlight then
+		highlight = Instance.new("Highlight")
+		highlight.Name = "BodyHighlightESP"
+		highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		highlight.FillTransparency = 0.6
+		highlight.OutlineTransparency = 0.2
+		highlight.Parent = character
+	end
+
+	local roleColor = getRoleColor(player)
+	highlight.FillColor = roleColor
+	highlight.OutlineColor = roleColor
+	highlight.Enabled = true
+end
+
+---------------------------------------------------------
+-- TARGET LOCK LOGIC
+---------------------------------------------------------
+local function getClosestTargetInFOV()
+	local closestTarget = nil
+	local shortestDistance = FOV_RADIUS
+	local viewportCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(TARGET_PART) then
+			local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+			local targetPart = player.Character[TARGET_PART]
+
+			if humanoid and humanoid.Health > 0 then
+				local screenPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+
+				if onScreen then
+					local targetScreenPos = Vector2.new(screenPos.X, screenPos.Y)
+					local distanceFromCenter = (targetScreenPos - viewportCenter).Magnitude
+
+					if distanceFromCenter <= shortestDistance then
+						shortestDistance = distanceFromCenter
+						closestTarget = targetPart
+					end
+				end
+			end
+		end
+	end
+
+	return closestTarget
+end
+
+-- Keybinds for PC
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == AIM_TOGGLE_KEY then
+		aimBtn:Click()
+	elseif input.KeyCode == ESP_TOGGLE_KEY then
+		espBtn:Click()
+	end
+end)
+
+---------------------------------------------------------
+-- MAIN RENDER LOOP
+---------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+	-- Refresh ESP Highlights
+	for _, player in ipairs(Players:GetPlayers()) do
+		updateHighlightESP(player)
+	end
+
+	-- Process Camera Aim Smoothing
+	if aimbotEnabled then
+		local targetPart = getClosestTargetInFOV()
+		if targetPart then
+			local currentCFrame = Camera.CFrame
+			local targetCFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
+			Camera.CFrame = currentCFrame:Lerp(targetCFrame, SMOOTHNESS)
+		end
+	end
+end)
+
